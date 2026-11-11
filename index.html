@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Werkstatt Scanner</title>
+    <!-- Barcode Scanner Bibliothek -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --text: #0f172a;
+            --border: #e2e8f0;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { background-color: var(--bg); color: var(--text); padding-bottom: 80px; }
+        
+        /* Header */
+        header { background: var(--primary); color: white; padding: 1rem; text-align: center; font-size: 1.25rem; font-weight: bold; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        
+        /* Container */
+        .container { padding: 1rem; max-width: 600px; margin: 0 auto; }
+        
+        /* Card */
+        .card { background: var(--surface); border-radius: 12px; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); margin-bottom: 1rem; border: 1px solid var(--border); }
+        
+        /* Inputs & Buttons */
+        input { width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1rem; font-size: 1rem; }
+        button { width: 100%; padding: 1rem; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 1.1rem; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
+        button:active { opacity: 0.8; }
+        .btn-outline { background: transparent; color: var(--text); border: 2px solid var(--border); margin-top: 0.5rem; }
+        
+        /* Result Area */
+        #result-area { display: none; }
+        .price-tag { font-size: 1.5rem; font-weight: bold; color: var(--primary); margin: 0.5rem 0; }
+        .ek-tag { font-size: 1.1rem; color: #64748b; }
+        
+        /* Navigation (Bottom) */
+        .nav-bar { position: fixed; bottom: 0; width: 100%; background: var(--surface); display: flex; border-top: 1px solid var(--border); }
+        .nav-bar button { border-radius: 0; background: transparent; color: var(--text); font-size: 1rem; padding: 1rem 0; border-right: 1px solid var(--border); }
+        .nav-bar button:last-child { border-right: none; }
+        .nav-bar button.active { color: var(--primary); border-bottom: 3px solid var(--primary); }
+        
+        /* Sections */
+        .section { display: none; }
+        .section.active { display: block; }
+        
+        /* Scanner Container */
+        #reader { width: 100%; border-radius: 8px; overflow: hidden; margin-bottom: 1rem; border: none !important; }
+        #reader video { border-radius: 8px; }
+        
+        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #22c55e; color: white; padding: 10px 20px; border-radius: 20px; display: none; z-index: 1000; }
+    </style>
+</head>
+<body>
+
+    <header>Werkstatt Scanner</header>
+    <div id="toast" class="toast">Aktion erfolgreich!</div>
+
+    <div class="container">
+        <!-- SCAN & SUCHEN SECTION -->
+        <div id="sec-scan" class="section active">
+            <div class="card">
+                <input type="text" id="searchInput" placeholder="EAN oder Artikelnummer eingeben...">
+                <button onclick="searchManual()">Suchen</button>
+            </div>
+
+            <div class="card" id="scanner-card">
+                <div id="reader"></div>
+            </div>
+
+            <div class="card" id="result-area">
+                <h2 id="res-name">Artikelname</h2>
+                <p>EAN: <span id="res-ean"></span> | ID: <span id="res-id"></span></p>
+                <div class="price-tag">VK: <span id="res-vk"></span> €</div>
+                <div class="ek-tag">EK: <span id="res-ek"></span> € <span style="font-size: 0.9rem; color: #94a3b8;">(Bestand: <span id="res-stock"></span>)</span></div>
+                <button class="btn-outline" onclick="resetScanner()">Neuer Scan</button>
+            </div>
+        </div>
+
+        <!-- NEUER ARTIKEL SECTION -->
+        <div id="sec-add" class="section">
+            <div class="card">
+                <h2>Neuen Artikel anlegen</h2>
+                <p style="margin-bottom: 1rem; font-size: 0.9rem; color: #64748b;">Lege hier Artikel an, die nicht in der CSV waren.</p>
+                
+                <input type="text" id="add-id" placeholder="Artikelnummer (z.B. 1001)">
+                <input type="text" id="add-name" placeholder="Artikelname">
+                <input type="text" id="add-ean" placeholder="EAN (Barcode)">
+                <input type="number" id="add-vk" placeholder="Verkaufspreis (€)" step="0.01">
+                <input type="number" id="add-ek" placeholder="Einkaufspreis (€)" step="0.01">
+                <button onclick="saveNewArticle()">Speichern</button>
+            </div>
+        </div>
+
+        <!-- IMPORT SECTION -->
+        <div id="sec-import" class="section">
+            <div class="card">
+                <h2>Datenbank Import</h2>
+                <p style="margin-bottom: 1rem; font-size: 0.9rem; color: #64748b;">Wähle die Datei "bereinigte_artikel_firebase.json" aus, um alle 1.377 Artikel hochzuladen.</p>
+                
+                <input type="file" id="fileInput" accept=".json">
+                <button onclick="importJSON()">Artikel hochladen</button>
+                <p id="import-status" style="margin-top: 1rem; font-weight: bold;"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- BOTTOM NAVIGATION -->
+    <div class="nav-bar">
+        <button id="nav-scan" class="active" onclick="switchTab('sec-scan', this)">🔍 Scannen</button>
+        <button id="nav-add" onclick="switchTab('sec-add', this)">+ Neu</button>
+        <button id="nav-import" onclick="switchTab('sec-import', this)">⚙️ Import</button>
+    </div>
+
+    <!-- Firebase v10 Modular SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, query, where, getDocs, doc, setDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // 1. DEINE FIREBASE CONFIGURATION
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnvPZj3oX5eTTcbwQm5AyED_8kYwPiV3g",
+            authDomain: "artikel-scanner-5700c.firebaseapp.com",
+            projectId: "artikel-scanner-5700c",
+            storageBucket: "artikel-scanner-5700c.firebasestorage.app",
+            messagingSenderId: "739157133099",
+            appId: "1:739157133099:web:76138ff100db10e25f676e"
+        };
+
+        // Firebase initialisieren
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- UI Navigation ---
+        window.switchTab = function(sectionId, btn) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.nav-bar button').forEach(b => b.classList.remove('active'));
+            document.getElementById(sectionId).classList.add('active');
+            btn.classList.add('active');
+            
+            if(sectionId !== 'sec-scan') {
+                if(html5QrcodeScanner) html5QrcodeScanner.pause();
+            } else {
+                if(html5QrcodeScanner) html5QrcodeScanner.resume();
+            }
+        };
+
+        window.showToast = function(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.style.display = 'block';
+            setTimeout(() => t.style.display = 'none', 3000);
+        }
+
+        // --- BARCODE SCANNER LOGIK ---
+        let html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 150}, aspectRatio: 1.0 }, false);
+        
+        async function onScanSuccess(decodedText, decodedResult) {
+            html5QrcodeScanner.pause(); // Scanner anhalten
+            document.getElementById('searchInput').value = decodedText;
+            await searchInFirebase(decodedText);
+        }
+        
+        html5QrcodeScanner.render(onScanSuccess, (error) => {});
+
+        window.searchManual = async function() {
+            const val = document.getElementById('searchInput').value.trim();
+            if(val) await searchInFirebase(val);
+        }
+
+        window.resetScanner = function() {
+            document.getElementById('result-area').style.display = 'none';
+            document.getElementById('scanner-card').style.display = 'block';
+            document.getElementById('searchInput').value = '';
+            html5QrcodeScanner.resume();
+        }
+
+        // --- DATENBANK SUCHE ---
+        async function searchInFirebase(searchTerm) {
+            document.getElementById('result-area').style.display = 'none';
+            
+            // Suche nach EAN oder ID
+            const qEan = query(collection(db, "produkte"), where("ean", "==", searchTerm));
+            let snapshot = await getDocs(qEan);
+            
+            // Wenn EAN nichts findet, suche nach Artikel-ID
+            if (snapshot.empty) {
+                const qId = query(collection(db, "produkte"), where("id", "==", searchTerm));
+                snapshot = await getDocs(qId);
+            }
+
+            if (!snapshot.empty) {
+                const data = snapshot.docs[0].data();
+                document.getElementById('res-name').innerText = data.name;
+                document.getElementById('res-ean').innerText = data.ean || '-';
+                document.getElementById('res-id').innerText = data.id;
+                document.getElementById('res-vk').innerText = Number(data.vk_price).toFixed(2).replace('.', ',');
+                document.getElementById('res-ek').innerText = Number(data.ek_price).toFixed(2).replace('.', ',');
+                document.getElementById('res-stock').innerText = data.stock;
+                
+                document.getElementById('scanner-card').style.display = 'none';
+                document.getElementById('result-area').style.display = 'block';
+            } else {
+                alert("Artikel nicht gefunden! Überprüfe die EAN oder tippe sie manuell ein.");
+                html5QrcodeScanner.resume();
+            }
+        }
+
+        // --- NEUEN ARTIKEL ANLEGEN ---
+        window.saveNewArticle = async function() {
+            const id = document.getElementById('add-id').value.trim();
+            const name = document.getElementById('add-name').value.trim();
+            const ean = document.getElementById('add-ean').value.trim();
+            const vk = parseFloat(document.getElementById('add-vk').value.replace(',','.')) || 0;
+            const ek = parseFloat(document.getElementById('add-ek').value.replace(',','.')) || 0;
+
+            if(!id || !name) {
+                alert("Artikelnummer und Name sind Pflichtfelder!");
+                return;
+            }
+
+            try {
+                await setDoc(doc(db, "produkte", id), {
+                    id: id,
+                    name: name,
+                    ean: ean,
+                    vk_price: vk,
+                    ek_price: ek,
+                    stock: 0
+                });
+                showToast("Artikel gespeichert!");
+                // Formular leeren
+                document.getElementById('add-id').value = '';
+                document.getElementById('add-name').value = '';
+                document.getElementById('add-ean').value = '';
+                document.getElementById('add-vk').value = '';
+                document.getElementById('add-ek').value = '';
+            } catch(e) {
+                alert("Fehler beim Speichern: " + e);
+            }
+        }
+
+        // --- JSON IMPORT (Batch Upload) ---
+        window.importJSON = function() {
+            const fileInput = document.getElementById('fileInput');
+            const status = document.getElementById('import-status');
+            
+            if (fileInput.files.length === 0) {
+                alert("Bitte wähle zuerst die bereinigte_artikel_firebase.json Datei aus.");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = async function(e) {
+                status.innerText = "Lese Datei... Bitte warten.";
+                status.style.color = "orange";
+                
+                try {
+                    const articles = JSON.parse(e.target.result);
+                    let batch = writeBatch(db);
+                    let count = 0;
+                    const batches = [];
+
+                    // Firestore erlaubt max 500 Operationen pro Batch
+                    for (const article of articles) {
+                        const docRef = doc(collection(db, "produkte"), article.id);
+                        batch.set(docRef, article);
+                        count++;
+                        
+                        if (count === 490) {
+                            batches.push(batch.commit());
+                            batch = writeBatch(db);
+                            count = 0;
+                        }
+                    }
+                    if (count > 0) {
+                        batches.push(batch.commit());
+                    }
+
+                    status.innerText = "Lade " + articles.length + " Artikel zu Firebase hoch...";
+                    
+                    await Promise.all(batches);
+                    
+                    status.innerText = "Erfolgreich! " + articles.length + " Artikel wurden in die Datenbank importiert.";
+                    status.style.color = "green";
+                    showToast("Import abgeschlossen");
+
+                } catch(error) {
+                    status.innerText = "Fehler: " + error.message;
+                    status.style.color = "red";
+                }
+            };
+
+            reader.readAsText(file);
+        }
+    </script>
+</body>
+</html>
