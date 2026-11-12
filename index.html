@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Werkstatt Scanner</title>
+    
+    <!-- App Icon / Favicon (Kleines Paket) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>">
+    
     <!-- Barcode Scanner Bibliothek -->
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
@@ -32,10 +37,22 @@
         button:active { opacity: 0.8; }
         .btn-outline { background: transparent; color: var(--text); border: 2px solid var(--border); margin-top: 0.5rem; }
         
-        /* Result Area */
-        #result-area { display: none; }
+        /* Suchfeld mit X */
+        .search-wrapper { position: relative; margin-bottom: 1rem; }
+        .search-wrapper input { margin-bottom: 0; padding-right: 2.5rem; }
+        .clear-btn { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 1.2rem; color: #94a3b8; display: none; padding: 5px; }
+        
+        /* Result Areas */
+        #result-area, #multi-result-area { display: none; }
         .price-tag { font-size: 1.5rem; font-weight: bold; color: var(--primary); margin: 0.5rem 0; }
         .ek-tag { font-size: 1.1rem; color: #64748b; }
+        
+        /* Listen-Design für Mehrfach-Ergebnisse */
+        .result-item { padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .result-item:last-child { border-bottom: none; }
+        .result-item:active { background-color: #f1f5f9; }
+        .res-title { font-weight: bold; font-size: 1rem; margin-bottom: 4px; }
+        .res-sub { font-size: 0.85rem; color: #64748b; }
         
         /* Navigation (Bottom) */
         .nav-bar { position: fixed; bottom: 0; width: 100%; background: var(--surface); display: flex; border-top: 1px solid var(--border); }
@@ -63,7 +80,10 @@
         <!-- SCAN & SUCHEN SECTION -->
         <div id="sec-scan" class="section active">
             <div class="card">
-                <input type="text" id="searchInput" placeholder="EAN oder Artikelnummer eingeben...">
+                <div class="search-wrapper">
+                    <input type="text" id="searchInput" placeholder="Name, EAN oder ID eingeben..." oninput="toggleClearBtn()" onkeypress="handleEnter(event)">
+                    <span id="clearBtn" class="clear-btn" onclick="clearSearch()">✖</span>
+                </div>
                 <button onclick="searchManual()">Suchen</button>
             </div>
 
@@ -71,12 +91,20 @@
                 <div id="reader"></div>
             </div>
 
+            <!-- Detail-Ansicht (1 Treffer) -->
             <div class="card" id="result-area">
                 <h2 id="res-name">Artikelname</h2>
                 <p>EAN: <span id="res-ean"></span> | ID: <span id="res-id"></span></p>
                 <div class="price-tag">VK: <span id="res-vk"></span> €</div>
                 <div class="ek-tag">EK: <span id="res-ek"></span> € <span style="font-size: 0.9rem; color: #94a3b8;">(Bestand: <span id="res-stock"></span>)</span></div>
                 <button class="btn-outline" onclick="resetScanner()">Neuer Scan</button>
+            </div>
+
+            <!-- Listen-Ansicht (Mehrere Treffer) -->
+            <div class="card" id="multi-result-area">
+                <h3 style="margin-bottom: 10px;">Suchergebnisse:</h3>
+                <div id="result-list"></div>
+                <button class="btn-outline" style="margin-top: 15px;" onclick="resetScanner()">Abbrechen & Neuer Scan</button>
             </div>
         </div>
 
@@ -99,7 +127,7 @@
         <div id="sec-import" class="section">
             <div class="card">
                 <h2>Datenbank Import</h2>
-                <p style="margin-bottom: 1rem; font-size: 0.9rem; color: #64748b;">Wähle die Datei "bereinigte_artikel_firebase.json" aus, um alle 1.377 Artikel hochzuladen.</p>
+                <p style="margin-bottom: 1rem; font-size: 0.9rem; color: #64748b;">Wähle die Datei "bereinigte_artikel_firebase.json" aus, um alle Artikel hochzuladen.</p>
                 
                 <input type="file" id="fileInput" accept=".json">
                 <button onclick="importJSON()">Artikel hochladen</button>
@@ -120,7 +148,6 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getFirestore, collection, query, where, getDocs, doc, setDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // 1. DEINE FIREBASE CONFIGURATION
         const firebaseConfig = {
             apiKey: "AIzaSyBnvPZj3oX5eTTcbwQm5AyED_8kYwPiV3g",
             authDomain: "artikel-scanner-5700c.firebaseapp.com",
@@ -130,11 +157,12 @@
             appId: "1:739157133099:web:76138ff100db10e25f676e"
         };
 
-        // Firebase initialisieren
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // --- UI Navigation ---
+        let allProductsCache = null; // Zwischenspeicher für die Teilwortsuche
+
+        // --- UI Steuerung ---
         window.switchTab = function(sectionId, btn) {
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-bar button').forEach(b => b.classList.remove('active'));
@@ -144,7 +172,9 @@
             if(sectionId !== 'sec-scan') {
                 if(html5QrcodeScanner) html5QrcodeScanner.pause();
             } else {
-                if(html5QrcodeScanner) html5QrcodeScanner.resume();
+                if(html5QrcodeScanner && document.getElementById('scanner-card').style.display !== 'none') {
+                    html5QrcodeScanner.resume();
+                }
             }
         };
 
@@ -155,12 +185,37 @@
             setTimeout(() => t.style.display = 'none', 3000);
         }
 
-        // --- BARCODE SCANNER LOGIK ---
+        window.toggleClearBtn = function() {
+            const val = document.getElementById('searchInput').value;
+            document.getElementById('clearBtn').style.display = val.length > 0 ? 'block' : 'none';
+        }
+
+        window.clearSearch = function() {
+            document.getElementById('searchInput').value = '';
+            toggleClearBtn();
+            resetScanner();
+        }
+
+        window.handleEnter = function(e) {
+            if(e.key === 'Enter') searchManual();
+        }
+
+        window.resetScanner = function() {
+            document.getElementById('result-area').style.display = 'none';
+            document.getElementById('multi-result-area').style.display = 'none';
+            document.getElementById('scanner-card').style.display = 'block';
+            document.getElementById('searchInput').value = '';
+            toggleClearBtn();
+            html5QrcodeScanner.resume();
+        }
+
+        // --- Scanner Initialisierung ---
         let html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 150}, aspectRatio: 1.0 }, false);
         
         async function onScanSuccess(decodedText, decodedResult) {
-            html5QrcodeScanner.pause(); // Scanner anhalten
+            html5QrcodeScanner.pause();
             document.getElementById('searchInput').value = decodedText;
+            toggleClearBtn();
             await searchInFirebase(decodedText);
         }
         
@@ -171,42 +226,80 @@
             if(val) await searchInFirebase(val);
         }
 
-        window.resetScanner = function() {
-            document.getElementById('result-area').style.display = 'none';
-            document.getElementById('scanner-card').style.display = 'block';
-            document.getElementById('searchInput').value = '';
-            html5QrcodeScanner.resume();
-        }
-
-        // --- DATENBANK SUCHE ---
+        // --- Intelligente Suche ---
         async function searchInFirebase(searchTerm) {
+            searchTerm = searchTerm.toLowerCase();
             document.getElementById('result-area').style.display = 'none';
+            document.getElementById('multi-result-area').style.display = 'none';
             
-            // Suche nach EAN oder ID
-            const qEan = query(collection(db, "produkte"), where("ean", "==", searchTerm));
-            let snapshot = await getDocs(qEan);
-            
-            // Wenn EAN nichts findet, suche nach Artikel-ID
-            if (snapshot.empty) {
-                const qId = query(collection(db, "produkte"), where("id", "==", searchTerm));
-                snapshot = await getDocs(qId);
+            // Lade den kompletten Katalog beim ersten Mal in den RAM (spart Firebase-Kosten)
+            if (!allProductsCache) {
+                try {
+                    const snapshot = await getDocs(collection(db, "produkte"));
+                    allProductsCache = snapshot.docs.map(doc => doc.data());
+                } catch (e) {
+                    alert("Verbindungsfehler zur Datenbank.");
+                    return;
+                }
             }
 
-            if (!snapshot.empty) {
-                const data = snapshot.docs[0].data();
-                document.getElementById('res-name').innerText = data.name;
-                document.getElementById('res-ean').innerText = data.ean || '-';
-                document.getElementById('res-id').innerText = data.id;
-                document.getElementById('res-vk').innerText = Number(data.vk_price).toFixed(2).replace('.', ',');
-                document.getElementById('res-ek').innerText = Number(data.ek_price).toFixed(2).replace('.', ',');
-                document.getElementById('res-stock').innerText = data.stock;
-                
-                document.getElementById('scanner-card').style.display = 'none';
-                document.getElementById('result-area').style.display = 'block';
+            // Filtern: Sucht in EAN, ID und Teilen des Namens
+            const results = allProductsCache.filter(p => 
+                (p.ean && p.ean.toLowerCase().includes(searchTerm)) || 
+                (p.id && p.id.toLowerCase().includes(searchTerm)) || 
+                (p.name && p.name.toLowerCase().includes(searchTerm))
+            );
+
+            if (results.length === 1) {
+                showSingleResult(results[0]);
+            } else if (results.length > 1) {
+                showMultiResults(results);
             } else {
-                alert("Artikel nicht gefunden! Überprüfe die EAN oder tippe sie manuell ein.");
+                alert("Kein Artikel gefunden für: " + searchTerm);
                 html5QrcodeScanner.resume();
             }
+        }
+
+        window.showSingleResult = function(data) {
+            document.getElementById('res-name').innerText = data.name;
+            document.getElementById('res-ean').innerText = data.ean || '-';
+            document.getElementById('res-id').innerText = data.id;
+            document.getElementById('res-vk').innerText = Number(data.vk_price).toFixed(2).replace('.', ',');
+            document.getElementById('res-ek').innerText = Number(data.ek_price).toFixed(2).replace('.', ',');
+            document.getElementById('res-stock').innerText = data.stock;
+            
+            document.getElementById('scanner-card').style.display = 'none';
+            document.getElementById('multi-result-area').style.display = 'none';
+            document.getElementById('result-area').style.display = 'block';
+            if(html5QrcodeScanner) html5QrcodeScanner.pause();
+        }
+
+        function showMultiResults(results) {
+            const list = document.getElementById('result-list');
+            list.innerHTML = ''; 
+
+            // Zeige maximal die ersten 50 Treffer, damit die App nicht ruckelt
+            const displayResults = results.slice(0, 50);
+
+            displayResults.forEach(data => {
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                // Inline-Funktion, um das angeklickte Ergebnis zu öffnen
+                div.onclick = () => showSingleResult(data);
+                div.innerHTML = `
+                    <div>
+                        <div class="res-title">${data.name}</div>
+                        <div class="res-sub">VK: ${Number(data.vk_price).toFixed(2).replace('.', ',')} € | EAN: ${data.ean || '-'}</div>
+                    </div>
+                    <div style="color: var(--primary); font-size: 1.5rem; margin-left: 10px;">➔</div>
+                `;
+                list.appendChild(div);
+            });
+
+            document.getElementById('scanner-card').style.display = 'none';
+            document.getElementById('result-area').style.display = 'none';
+            document.getElementById('multi-result-area').style.display = 'block';
+            if(html5QrcodeScanner) html5QrcodeScanner.pause();
         }
 
         // --- NEUEN ARTIKEL ANLEGEN ---
@@ -222,16 +315,17 @@
                 return;
             }
 
+            const newArticle = { id: id, name: name, ean: ean, vk_price: vk, ek_price: ek, stock: 0 };
+
             try {
-                await setDoc(doc(db, "produkte", id), {
-                    id: id,
-                    name: name,
-                    ean: ean,
-                    vk_price: vk,
-                    ek_price: ek,
-                    stock: 0
-                });
+                await setDoc(doc(db, "produkte", id), newArticle);
                 showToast("Artikel gespeichert!");
+                
+                // Direkt auch in den lokalen Zwischenspeicher aufnehmen, falls er schon geladen ist
+                if (allProductsCache) {
+                    allProductsCache.push(newArticle);
+                }
+
                 // Formular leeren
                 document.getElementById('add-id').value = '';
                 document.getElementById('add-name').value = '';
@@ -243,7 +337,7 @@
             }
         }
 
-        // --- JSON IMPORT (Batch Upload) ---
+        // --- JSON IMPORT ---
         window.importJSON = function() {
             const fileInput = document.getElementById('fileInput');
             const status = document.getElementById('import-status');
@@ -266,7 +360,6 @@
                     let count = 0;
                     const batches = [];
 
-                    // Firestore erlaubt max 500 Operationen pro Batch
                     for (const article of articles) {
                         const docRef = doc(collection(db, "produkte"), article.id);
                         batch.set(docRef, article);
@@ -289,6 +382,7 @@
                     status.innerText = "Erfolgreich! " + articles.length + " Artikel wurden in die Datenbank importiert.";
                     status.style.color = "green";
                     showToast("Import abgeschlossen");
+                    allProductsCache = null; // Cache löschen, um die neuen Daten zu erzwingen
 
                 } catch(error) {
                     status.innerText = "Fehler: " + error.message;
